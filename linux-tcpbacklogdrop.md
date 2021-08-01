@@ -58,5 +58,53 @@ here's the output:
 [1627803920] 172.16.16.25:8888<=>172.16.16.20:57348	sk_rcvbuf:67108864 sk_sndbuf:46080 sk_backlog.len:2286080 sk_rmem_alloc:65022720 rcvq_full:1
 ```
 so, it's really full, even with rcvbuf set to 67108864(64M).
-how ever, if I call setsockopt manually to set SO_RCVBUF to 8M, there's no more backlogdrop..., need more time to dig the cause.
+how ever, if I call setsockopt manually to set SO_RCVBUF to 8M, there's no more backlogdrop...
+SO_RCVBUF effect:
+```c
+    case SO_RCVBUF:
+...
+        sk->sk_userlocks |= SOCK_RCVBUF_LOCK;
+```
+in tcp_rcv_space_adjust, it will change window_clam if SOCK_RCVBUF_LOCK not set. so there's difference with tcp auto tune tcp buff and manually setsockopt.
+```c
+   if (sysctl_tcp_moderate_rcvbuf &&
+        !(sk->sk_userlocks & SOCK_RCVBUF_LOCK)) {
+        int rcvwin, rcvmem, rcvbuf;
 
+        /* minimal window to cope with packet losses, assuming
+         * steady state. Add some cushion because of small variations.
+         */
+        rcvwin = (copied << 1) + 16 * tp->advmss;
+
+        /* If rate increased by 25%,
+         *  assume slow start, rcvwin = 3 * copied
+         * If rate increased by 50%,
+         *  assume sender can use 2x growth, rcvwin = 4 * copied
+         */
+        if (copied >=
+            tp->rcvq_space.space + (tp->rcvq_space.space >> 2)) {
+            if (copied >=
+                tp->rcvq_space.space + (tp->rcvq_space.space >> 1))
+                rcvwin <<= 1;
+            else
+                rcvwin += (rcvwin >> 1);
+        }
+
+        rcvmem = SKB_TRUESIZE(tp->advmss + MAX_TCP_HEADER);
+        while (tcp_win_from_space(rcvmem) < tp->advmss)
+            rcvmem += 128;
+
+        rcvbuf = min(rcvwin / tp->advmss * rcvmem, sysctl_tcp_rmem[2]);
+        if (rcvbuf > sk->sk_rcvbuf) {
+            sk->sk_rcvbuf = rcvbuf;
+
+            /* Make the window clamp follow along.  */
+            tp->window_clamp = rcvwin;
+        }
+    }
+```
+
+try to  turn off tcp rcvbuf auto tuning, no backlogdrop also, even with a small 143872 bytes rcvbuf.
+```
+sysctl -w net.ipv4.tcp_moderate_rcvbuf=0
+```
