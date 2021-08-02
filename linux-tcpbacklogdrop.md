@@ -27,7 +27,7 @@ Then we may place a probe at line 1746, here is the tcpbacklogdrop.stp
 # script: tcpbacklogdrop.stp
 function sock_rmem_alloc:long (sk:long) %{/* pure */
     struct sock* s = (struct sock*)STAP_ARG_sk;
-    STAP_RETVALUE = s->sk_backlog.rmem_alloc.counter;
+    STAP_RETVALUE = atomic_read(&s->sk_backlog.rmem_alloc);
 %}
 
 function sock_backlog_len:long (sk:long) %{/* pure */
@@ -108,3 +108,7 @@ try to  turn off tcp rcvbuf auto tuning, no backlogdrop also, even with a small 
 ```
 sysctl -w net.ipv4.tcp_moderate_rcvbuf=0
 ```
+
+### solution
+1.  set a fix rcvbuf with setsockopt
+2.  or, turn off net.ipv4.tcp_moderate_rcvbuf (not recommended)
